@@ -1,0 +1,21 @@
+{
+  "name": "qq-ai-digest",
+  "version": "1.0.0",
+  "description": "QQ 消息智能筛选与 AI 日报总结工具 (OneBot v11 / NapCat + Remote LLM API)",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx watch src/index.ts",
+    "build:exe": "C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe /target:winexe /out:QQ智能日报助手.exe /win32icon:D:\\NapCat\\NapCat.Shell\\static\\favicon.ico /r:System.Windows.Forms.dll /r:System.Drawing.dll launcher\\Program.cs"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

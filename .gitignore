@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+dist/
+
+# Local Database, User Config & Logs (Contains personal chat history & API keys)
+data/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.log
+
+# Environment & Secret files
+.env
+.env.*
+!.env.example
+
+# Local AI Proxy Hubs (Contains local auth state)
+qoder2api-hub/
+workbuddy2api-hub/
+启动WorkBuddy反代.bat
+启动WorkBuddy代理.bat
+启动NapCat.bat
