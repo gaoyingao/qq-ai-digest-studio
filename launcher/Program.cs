@@ -330,6 +330,10 @@ namespace QQAiDigestLauncher
 
                     if (content.Contains("show-main-window"))
                     {
+                        if (backendProcess == null || backendProcess.HasExited)
+                        {
+                            StartBackendSilently();
+                        }
                         if (mainForm != null) mainForm.ShowAndActivate();
                         isExecutingAction = false;
                         return;
@@ -517,8 +521,7 @@ namespace QQAiDigestLauncher
                         Arguments = "\"" + QqExePath + "\" \"" + NapCatLoaderDll + "\" \"" + NapCatLoaderScript + "\"",
                         WorkingDirectory = NapCatFrameworkDir,
                         UseShellExecute = false,
-                        CreateNoWindow = true,
-                        WindowStyle = ProcessWindowStyle.Hidden
+                        CreateNoWindow = true
                     };
                     Process.Start(psi);
                     LogBoot("Coexistence Official QQ launched via napimain.exe (0 console windows).");

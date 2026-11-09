@@ -71,12 +71,8 @@ setTimeout(async () => {
   }
 }, 3500);
 
-// 每 90 秒在后台静默执行一次最近活跃群历史消息回溯补齐，确保任何漫游或离线同步消息 0 遗漏
-setInterval(() => {
-  if (napcatStatus.connected) {
-    backfillRecentGroupHistory(currentConfig, 30, 50).catch(() => {});
-  }
-}, 90 * 1000);
+// 实时群消息已通过 OneBot WebSocket (onRecvMsg) 零延迟推送，仅在启动后、手动点击同步或生成日报前按需增量回溯，不在后台轮询占用官方 QQ 通道
+
 
 // 每日定时自动生成日报检查器 (每分钟以中国标准时间 UTC+8 检查一次是否到达设定时间)
 let lastTriggeredDate = '';

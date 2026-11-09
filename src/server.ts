@@ -342,7 +342,7 @@ export function startDashboardServer(
               cwd: 'D:\\NapCat\\NapCat.Framework',
               detached: true,
               stdio: 'ignore',
-              windowsHide: true,
+              windowsHide: false,
             }
           );
           child.unref();

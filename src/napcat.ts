@@ -269,8 +269,8 @@ export async function fetchChatHistory(
  */
 export async function backfillRecentGroupHistory(
   config: AppConfig,
-  maxGroups = 60,
-  countPerGroup = 60
+  maxGroups = 25,
+  countPerGroup = 45
 ): Promise<{ scannedGroups: number; newlyInserted: number }> {
   if (isBackfilling || !getActiveSocket()) {
     return { scannedGroups: 0, newlyInserted: 0 };
@@ -278,11 +278,24 @@ export async function backfillRecentGroupHistory(
   isBackfilling = true;
   try {
     const targetGroupIds = new Set<string>();
+    const localGroupLastTs = new Map<string, number>();
 
-    // 1. 优先通过 get_recent_contact 获取最近有新消息的群聊（按最新活跃排序）
+    // 先读取本地 SQLite 已记录的各群最新消息时间戳，精准跳过无新增消息的群，彻底杜绝无意义 RPC 占用官方 QQ 通道
+    try {
+      const discovered = getDiscoveredGroups();
+      for (const g of discovered) {
+        if (g.group_id) {
+          localGroupLastTs.set(String(g.group_id), Number(g.last_active || 0));
+        }
+      }
+    } catch {}
+
+    // 1. 优先通过 get_recent_contact 获取最近有新消息的群聊，并仅将“远端最新消息时间 > 本地最新消息时间”的群加入回溯队列
+    let recentContactSucceeded = false;
     try {
       const recentList = await callOneBotApi('get_recent_contact', { count: 60 }, 8000);
-      if (Array.isArray(recentList)) {
+      if (Array.isArray(recentList) && recentList.length > 0) {
+        recentContactSucceeded = true;
         const groupItems = recentList
           .filter((item) => Number(item?.chatType) === 2 && item?.peerUin)
           .sort((a, b) => Number(b.msgTime || 0) - Number(a.msgTime || 0));
@@ -291,33 +304,28 @@ export async function backfillRecentGroupHistory(
           if (item.peerName && !groupNameCache.has(gid)) {
             groupNameCache.set(gid, sanitizeName(item.peerName));
           }
-          targetGroupIds.add(gid);
+          const remoteTsMs = Number(item.msgTime || 0) * 1000;
+          const localTsMs = localGroupLastTs.get(gid) || 0;
+          // 仅当远端会话最新消息时间晚于本地已收录的最新消息时间（留 2 秒容差）时才需要拉取该群历史
+          if (!remoteTsMs || remoteTsMs + 2000 >= localTsMs) {
+            targetGroupIds.add(gid);
+          }
         }
       }
     } catch (err: any) {
       console.warn('[Backfill] get_recent_contact 暂未就绪，自动使用已知活跃群列表回溯:', err?.message || err);
     }
 
-    // 2. 补充本地 SQLite 已知活跃群（按最近活跃时间降序）
-    try {
-      const discovered = getDiscoveredGroups();
-      for (const g of discovered) {
-        if (g.group_id) {
-          targetGroupIds.add(String(g.group_id));
+    // 2. 若 get_recent_contact 未返回数据，才使用本地已知活跃群前 15 个兜底
+    if (!recentContactSucceeded) {
+      try {
+        const discovered = getDiscoveredGroups();
+        for (const g of discovered.slice(0, 15)) {
+          if (g.group_id) {
+            targetGroupIds.add(String(g.group_id));
+          }
         }
-      }
-    } catch {}
-
-    // 3. 补充用户已配置监控的群和 QQ 群列表缓存中的群
-    if (config.filter.monitoredGroups && typeof config.filter.monitoredGroups === 'object') {
-      for (const gid of Object.keys(config.filter.monitoredGroups)) {
-        if (config.filter.monitoredGroups[gid]?.enabled !== false) {
-          targetGroupIds.add(gid);
-        }
-      }
-    }
-    for (const gid of groupNameCache.keys()) {
-      targetGroupIds.add(gid);
+      } catch {}
     }
 
     // 过滤掉被用户显式关闭监控的群
@@ -333,7 +341,6 @@ export async function backfillRecentGroupHistory(
     let newlyInserted = 0;
 
     // 重要修复：必须以“上次已总结时间锚点 (lastSummarizedAt)”作为回溯起点，而不能用 lastMessageTs！
-    // 否则一旦刚开机收到 1 条实时新消息，lastMessageTs 跳到当前时间，会导致中间数小时的离线未读消息被误跳过！
     const watermark = getDigestWatermarkState();
     const minAllowedTs = Math.max(
       Date.now() - 36 * 3600_000,
@@ -343,7 +350,8 @@ export async function backfillRecentGroupHistory(
     for (const gid of groupIds) {
       if (!getActiveSocket()) break;
       try {
-        await new Promise((r) => setTimeout(r, 40));
+        // 留出 100ms 温和间隔，绝不抢占官方桌面 QQ 的主线程与发消息通道
+        await new Promise((r) => setTimeout(r, 100));
         const res = await callOneBotApi(
           'get_group_msg_history',
           {
@@ -355,9 +363,10 @@ export async function backfillRecentGroupHistory(
           6000
         );
         const rawMsgs: OneBotMessageEvent[] = res?.messages || [];
+        const groupFloorTs = Math.max(minAllowedTs, (localGroupLastTs.get(gid) || 0) - 5000);
         for (const ev of rawMsgs) {
           const evTimeMs = ev.time ? ev.time * 1000 : Date.now();
-          if (evTimeMs <= minAllowedTs) continue;
+          if (evTimeMs <= groupFloorTs && evTimeMs <= minAllowedTs) continue;
           ev.post_type = 'message';
           ev.message_type = 'group';
           ev.group_id = Number(gid);
@@ -378,7 +387,7 @@ export async function backfillRecentGroupHistory(
     }
 
     if (newlyInserted > 0) {
-      console.log(`[Backfill] 已自动从 ${groupIds.length} 个群回溯补齐了 ${newlyInserted} 条离线/漏收的新增群消息！`);
+      console.log(`[Backfill] 已按需从 ${groupIds.length} 个有新消息的群补齐了 ${newlyInserted} 条离线群消息！`);
     }
     return { scannedGroups: groupIds.length, newlyInserted };
   } finally {
@@ -529,10 +538,10 @@ export function handleIncomingOneBotPacket(
           }
         }
         console.log(`[NapCat] 已同步 ${groupNameCache.size} 个 QQ 群名称缓存`);
-        // 群列表同步完成后，立即回溯补齐离线或未运行期间的新增群消息
+        // 延迟 5 秒等官方桌面 QQ 完成界面与会话加载后，再按需轻量回溯有新消息的群聊，确保官方 QQ 零卡顿
         setTimeout(() => {
-          backfillRecentGroupHistory(getConfig(), 65, 65).catch(() => {});
-        }, 800);
+          backfillRecentGroupHistory(getConfig(), 20, 45).catch(() => {});
+        }, 5000);
       } else if (data.echo === 'init_friend_list' && Array.isArray(data.data)) {
         for (const fr of data.data) {
           if (fr.user_id) {
